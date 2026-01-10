@@ -1,0 +1,593 @@
+// ============================================================
+// VORA - Healthcare Nomad SaaS Platform
+// Database Schema - PostgreSQL with Prisma ORM
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum UserRole {
+  SUPER_ADMIN    // Platform owner - full access
+  PRO_START      // Free tier professional
+  PRO_GROW       // Basic paid tier
+  PRO_ELITE      // Premium tier
+  PATIENT        // End user / patient
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+  TRIALING
+  PAUSED
+}
+
+enum AppointmentStatus {
+  PENDING       // Awaiting confirmation
+  CONFIRMED     // Confirmed by professional
+  COMPLETED     // Appointment done
+  CANCELED      // Canceled by either party
+  NO_SHOW       // Patient didn't attend
+}
+
+enum GiraStatus {
+  DRAFT         // Being planned
+  PUBLISHED     // Visible to patients
+  IN_PROGRESS   // Currently happening
+  COMPLETED     // Finished
+  CANCELED      // Canceled
+}
+
+enum VerificationStatus {
+  PENDING       // Awaiting review
+  APPROVED      // License verified
+  REJECTED      // License rejected
+  EXPIRED       // Needs renewal
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum FileType {
+  PRESCRIPTION    // Receta médica
+  LAB_RESULT      // Resultado de laboratorio
+  IMAGING         // Imagen médica (RX, etc)
+  REPORT          // Informe médico
+  OTHER           // Otros documentos
+}
+
+// ============================================================
+// AUTHENTICATION & USERS
+// ============================================================
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  emailVerified   DateTime? @map("email_verified")
+  hashedPassword  String?   @map("hashed_password")
+  role            UserRole  @default(PATIENT)
+  
+  // Basic Profile
+  firstName       String?   @map("first_name")
+  lastName        String?   @map("last_name")
+  phone           String?
+  avatarUrl       String?   @map("avatar_url")
+  
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  lastLoginAt     DateTime? @map("last_login_at")
+  
+  // Relations
+  accounts        Account[]
+  sessions        Session[]
+  
+  // Professional Profile (if applicable)
+  professionalProfile ProfessionalProfile?
+  
+  // Patient Profile (if applicable)
+  patientProfile  PatientProfile?
+  
+  // Subscriptions
+  subscription    Subscription?
+  
+  // Activity Log
+  activityLogs    ActivityLog[]
+
+  @@map("users")
+}
+
+// ============================================================
+// PROFESSIONAL PROFILES
+// ============================================================
+
+model ProfessionalProfile {
+  id                  String             @id @default(cuid())
+  userId              String             @unique @map("user_id")
+  user                User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Professional Info
+  specialty           String             // Especialidad médica
+  licenseNumber       String             @map("license_number") // Número de matrícula
+  licenseProvince     String?            @map("license_province") // Provincia de matrícula
+  
+  // Verification
+  verificationStatus  VerificationStatus @default(PENDING)
+  verifiedAt          DateTime?          @map("verified_at")
+  verifiedBy          String?            @map("verified_by")
+  verificationNotes   String?            @map("verification_notes") @db.Text
+  
+  // Public Profile
+  bio                 String?            @db.Text
+  education           Json?              // Array of education entries
+  experience          Json?              // Array of experience entries
+  languages           String[]           // Languages spoken
+  
+  // Contact & Social (Visibility depends on tier)
+  publicEmail         String?            @map("public_email")
+  publicPhone         String?            @map("public_phone")
+  whatsappNumber      String?            @map("whatsapp_number")
+  instagramHandle     String?            @map("instagram_handle")
+  websiteUrl          String?            @map("website_url")
+  
+  // Consultation Settings
+  consultationPrice   Decimal?           @map("consultation_price") @db.Decimal(10, 2)
+  consultationDuration Int               @default(30) @map("consultation_duration") // minutes
+  depositRequired     Boolean            @default(false) @map("deposit_required")
+  depositAmount       Decimal?           @map("deposit_amount") @db.Decimal(10, 2)
+  
+  // Ratings
+  averageRating       Decimal            @default(0) @map("average_rating") @db.Decimal(2, 1)
+  totalReviews        Int                @default(0) @map("total_reviews")
+  
+  // SEO & Discovery
+  slug                String             @unique // URL-friendly identifier
+  isPublic            Boolean            @default(true) @map("is_public")
+  
+  // Timestamps
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
+  
+  // Relations
+  giras               TravelGira[]
+  appointments        Appointment[]
+  reviews             Review[]
+  medicalFiles        MedicalFile[]
+
+  @@map("professional_profiles")
+}
+
+// ============================================================
+// PATIENT PROFILES
+// ============================================================
+
+model PatientProfile {
+  id              String    @id @default(cuid())
+  userId          String    @unique @map("user_id")
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Personal Info
+  dateOfBirth     DateTime? @map("date_of_birth")
+  gender          String?
+  dni             String?   // Documento Nacional de Identidad
+  
+  // Health Info (encrypted)
+  bloodType       String?   @map("blood_type")
+  allergies       String?   @db.Text
+  chronicConditions String? @map("chronic_conditions") @db.Text
+  currentMedications String? @map("current_medications") @db.Text
+  
+  // Emergency Contact
+  emergencyContactName  String? @map("emergency_contact_name")
+  emergencyContactPhone String? @map("emergency_contact_phone")
+  
+  // Location
+  city            String?
+  province        String?
+  
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  
+  // Relations
+  appointments    Appointment[]
+  medicalFiles    MedicalFile[]
+  reviews         Review[]
+
+  @@map("patient_profiles")
+}
+
+// ============================================================
+// TRAVEL GIRAS (Medical Trips)
+// ============================================================
+
+model TravelGira {
+  id                  String      @id @default(cuid())
+  professionalId      String      @map("professional_id")
+  professional        ProfessionalProfile @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  
+  // Trip Details
+  title               String
+  description         String?     @db.Text
+  destination         String      @default("Ushuaia")
+  
+  // Dates
+  arrivalDate         DateTime    @map("arrival_date")
+  departureDate       DateTime    @map("departure_date")
+  
+  // Availability
+  status              GiraStatus  @default(DRAFT)
+  maxAppointmentsPerDay Int       @default(8) @map("max_appointments_per_day")
+  
+  // Location Details
+  consultationAddress String?     @map("consultation_address")
+  consultationCity    String      @default("Ushuaia") @map("consultation_city")
+  
+  // Flight Info (for delay notifications)
+  flightNumber        String?     @map("flight_number")
+  flightStatus        String?     @map("flight_status") // ON_TIME, DELAYED, CANCELED
+  
+  // Timestamps
+  createdAt           DateTime    @default(now()) @map("created_at")
+  updatedAt           DateTime    @updatedAt @map("updated_at")
+  publishedAt         DateTime?   @map("published_at")
+  
+  // Relations
+  appointments        Appointment[]
+  timeSlots           TimeSlot[]
+
+  @@map("travel_giras")
+}
+
+// ============================================================
+// TIME SLOTS
+// ============================================================
+
+model TimeSlot {
+  id          String    @id @default(cuid())
+  giraId      String    @map("gira_id")
+  gira        TravelGira @relation(fields: [giraId], references: [id], onDelete: Cascade)
+  
+  date        DateTime
+  startTime   DateTime  @map("start_time")
+  endTime     DateTime  @map("end_time")
+  isAvailable Boolean   @default(true) @map("is_available")
+  isBlocked   Boolean   @default(false) @map("is_blocked")
+  
+  // Relation
+  appointment Appointment?
+
+  @@map("time_slots")
+}
+
+// ============================================================
+// APPOINTMENTS
+// ============================================================
+
+model Appointment {
+  id                  String            @id @default(cuid())
+  
+  // Relations
+  professionalId      String            @map("professional_id")
+  professional        ProfessionalProfile @relation(fields: [professionalId], references: [id])
+  
+  patientId           String            @map("patient_id")
+  patient             PatientProfile    @relation(fields: [patientId], references: [id])
+  
+  giraId              String?           @map("gira_id")
+  gira                TravelGira?       @relation(fields: [giraId], references: [id])
+  
+  timeSlotId          String?           @unique @map("time_slot_id")
+  timeSlot            TimeSlot?         @relation(fields: [timeSlotId], references: [id])
+  
+  // Appointment Details
+  scheduledDate       DateTime          @map("scheduled_date")
+  scheduledTime       DateTime          @map("scheduled_time")
+  duration            Int               @default(30) // minutes
+  
+  // Status
+  status              AppointmentStatus @default(PENDING)
+  
+  // Reason / Notes
+  reason              String?           @db.Text
+  patientNotes        String?           @map("patient_notes") @db.Text
+  professionalNotes   String?           @map("professional_notes") @db.Text
+  
+  // Payment
+  depositAmount       Decimal?          @map("deposit_amount") @db.Decimal(10, 2)
+  depositStatus       PaymentStatus?    @map("deposit_status")
+  depositPaidAt       DateTime?         @map("deposit_paid_at")
+  
+  // Reminders
+  reminderSent24h     Boolean           @default(false) @map("reminder_sent_24h")
+  reminderSent1h      Boolean           @default(false) @map("reminder_sent_1h")
+  
+  // Timestamps
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+  confirmedAt         DateTime?         @map("confirmed_at")
+  completedAt         DateTime?         @map("completed_at")
+  canceledAt          DateTime?         @map("canceled_at")
+  
+  // Relations
+  payments            Payment[]
+  medicalFiles        MedicalFile[]
+
+  @@map("appointments")
+}
+
+// ============================================================
+// PAYMENTS
+// ============================================================
+
+model Payment {
+  id              String        @id @default(cuid())
+  appointmentId   String        @map("appointment_id")
+  appointment     Appointment   @relation(fields: [appointmentId], references: [id])
+  
+  // Payment Details
+  amount          Decimal       @db.Decimal(10, 2)
+  currency        String        @default("ARS")
+  status          PaymentStatus @default(PENDING)
+  
+  // Gateway Info
+  gateway         String        // mercadopago, stripe, etc.
+  gatewayPaymentId String?      @map("gateway_payment_id")
+  gatewayResponse Json?         @map("gateway_response")
+  
+  // Timestamps
+  createdAt       DateTime      @default(now()) @map("created_at")
+  paidAt          DateTime?     @map("paid_at")
+  refundedAt      DateTime?     @map("refunded_at")
+
+  @@map("payments")
+}
+
+// ============================================================
+// MEDICAL FILES (Medical Vault)
+// ============================================================
+
+model MedicalFile {
+  id              String        @id @default(cuid())
+  
+  // Relations
+  professionalId  String        @map("professional_id")
+  professional    ProfessionalProfile @relation(fields: [professionalId], references: [id])
+  
+  patientId       String        @map("patient_id")
+  patient         PatientProfile @relation(fields: [patientId], references: [id])
+  
+  appointmentId   String?       @map("appointment_id")
+  appointment     Appointment?  @relation(fields: [appointmentId], references: [id])
+  
+  // File Info
+  fileName        String        @map("file_name")
+  fileType        FileType      @map("file_type")
+  mimeType        String        @map("mime_type")
+  fileSize        Int           @map("file_size") // bytes
+  
+  // Storage
+  storageKey      String        @map("storage_key") // S3/Supabase key
+  storageUrl      String?       @map("storage_url")
+  
+  // Encryption
+  encryptionKey   String?       @map("encryption_key")
+  isEncrypted     Boolean       @default(true) @map("is_encrypted")
+  
+  // Metadata
+  description     String?       @db.Text
+  tags            String[]
+  
+  // Access
+  isSharedWithPatient Boolean   @default(false) @map("is_shared_with_patient")
+  
+  // Timestamps
+  createdAt       DateTime      @default(now()) @map("created_at")
+  expiresAt       DateTime?     @map("expires_at")
+
+  @@map("medical_files")
+}
+
+// ============================================================
+// REVIEWS
+// ============================================================
+
+model Review {
+  id              String              @id @default(cuid())
+  
+  // Relations
+  professionalId  String              @map("professional_id")
+  professional    ProfessionalProfile @relation(fields: [professionalId], references: [id])
+  
+  patientId       String              @map("patient_id")
+  patient         PatientProfile      @relation(fields: [patientId], references: [id])
+  
+  // Review Content
+  rating          Int                 // 1-5
+  title           String?
+  comment         String?             @db.Text
+  
+  // Professional Response
+  response        String?             @db.Text
+  respondedAt     DateTime?           @map("responded_at")
+  
+  // Moderation
+  isPublic        Boolean             @default(true) @map("is_public")
+  isVerified      Boolean             @default(false) @map("is_verified") // Verified appointment
+  
+  // Timestamps
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+
+  @@unique([professionalId, patientId]) // One review per patient per professional
+  @@map("reviews")
+}
+
+// ============================================================
+// SUBSCRIPTIONS & PLANS
+// ============================================================
+
+model SubscriptionPlan {
+  id              String    @id @default(cuid())
+  
+  // Plan Info
+  name            String    // START, GROW, ELITE
+  displayName     String    @map("display_name")
+  description     String?   @db.Text
+  
+  // Pricing
+  price           Decimal   @db.Decimal(10, 2)
+  currency        String    @default("ARS")
+  interval        String    @default("month") // month, year
+  
+  // Feature Flags
+  features        Json      // Array of feature flags
+  
+  // Limits
+  maxGirasPerMonth    Int? @map("max_giras_per_month")
+  maxAppointmentsPerGira Int? @map("max_appointments_per_gira")
+  
+  // Status
+  isActive        Boolean   @default(true) @map("is_active")
+  
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  
+  // Relations
+  subscriptions   Subscription[]
+
+  @@map("subscription_plans")
+}
+
+model Subscription {
+  id              String             @id @default(cuid())
+  userId          String             @unique @map("user_id")
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  planId          String             @map("plan_id")
+  plan            SubscriptionPlan   @relation(fields: [planId], references: [id])
+  
+  // Status
+  status          SubscriptionStatus @default(ACTIVE)
+  
+  // Dates
+  startDate       DateTime           @map("start_date")
+  endDate         DateTime?          @map("end_date")
+  trialEndsAt     DateTime?          @map("trial_ends_at")
+  canceledAt      DateTime?          @map("canceled_at")
+  
+  // Gateway
+  gatewaySubscriptionId String?      @map("gateway_subscription_id")
+  gatewayCustomerId     String?      @map("gateway_customer_id")
+  
+  // Timestamps
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+
+  @@map("subscriptions")
+}
+
+// ============================================================
+// CMS & SITE CONTENT
+// ============================================================
+
+model SiteContent {
+  id        String   @id @default(cuid())
+  key       String   @unique // e.g., "hero_banner", "footer_text"
+  content   Json     // Flexible JSON content
+  version   Int      @default(1)
+  isActive  Boolean  @default(true) @map("is_active")
+  
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("site_content")
+}
+
+// ============================================================
+// ACTIVITY LOGS
+// ============================================================
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  action    String   // e.g., "appointment.created", "profile.updated"
+  details   Json?
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@map("activity_logs")
+}
+
+// ============================================================
+// SPECIALTIES (Lookup Table)
+// ============================================================
+
+model Specialty {
+  id          String  @id @default(cuid())
+  name        String  @unique
+  displayName String  @map("display_name")
+  icon        String?
+  isActive    Boolean @default(true) @map("is_active")
+
+  @@map("specialties")
+}
