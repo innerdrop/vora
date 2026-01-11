@@ -1,6 +1,8 @@
 import { getProfessionals, getSpecialties } from "@/lib/actions";
 import { BuscarClient } from "./client";
 
+export const dynamic = "force-dynamic";
+
 export const metadata = {
     title: "Buscar Profesionales",
     description: "Encontrá especialistas verificados que viajan a Ushuaia y Tierra del Fuego",

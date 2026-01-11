@@ -1,14 +1,13 @@
 # ============================================================
 # VORA - Production Dockerfile
-# Multi-stage build for optimized image size
+# Using Debian Slim for better compatibility with Prisma/OpenSSL
 # ============================================================
 
-FROM node:20-alpine AS base
+FROM node:20-slim AS base
 
 # Install dependencies only when needed
-# Install dependencies only when needed
 FROM base AS deps
-RUN apk add --no-cache libc6-compat openssl
+RUN apt-get update && apt-get install -y openssl
 WORKDIR /app
 
 # Copy package files
@@ -33,6 +32,8 @@ ENV NEXT_TELEMETRY_DISABLED 1
 ENV NODE_ENV production
 
 # Build the application
+# Note: Database access during build might fail, so we ensure 
+# pages that need DB are dynamic or handle errors gracefully.
 RUN npm run build
 
 # Production image, copy all the files and run next
