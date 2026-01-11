@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ====================================================
-# VORA - VPS Setup Script
+# VORA - VPS Setup Script (Hybrid: Docker DB + PM2 App)
 # ====================================================
 
 set -e
@@ -12,29 +12,25 @@ BLUE='\033[0;34m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-echo -e "${BLUE}>>> Iniciando despliegue de VORA...${NC}"
+echo -e "${BLUE}>>> Iniciando despliegue de VORA (Modo Simple)...${NC}"
 
-# 0. Verificar e Instalar Docker
+# 1. Configurar Base de Datos (Docker)
+echo -e "${BLUE}>>> Iniciando Base de Datos...${NC}"
 if ! command -v docker &> /dev/null; then
-    echo -e "${BLUE}>>> Docker no encontrado. Instalando Docker...${NC}"
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sh get-docker.sh
-    rm get-docker.sh
-    echo -e "${GREEN}>>> Docker instalado correctamente.${NC}"
-else
-    echo -e "${BLUE}>>> Docker ya está instalado.${NC}"
+    echo -e "${RED}Error: Docker no está instalado. Instalá Docker primero.${NC}"
+    exit 1
 fi
 
-# 1. Configurar Variables de Entorno
+docker compose up -d
+
+# 2. Configurar Variables de Entorno
+# Nota: La DB se accede como localhost:5434 desde el host
 if [ ! -f .env ]; then
     echo -e "${BLUE}>>> Creando archivo .env...${NC}"
-    
-    # Generar un secret aleatorio
     AUTH_SECRET=$(openssl rand -base64 32)
-    
     cat > .env << EOL
 # --- DATABASE ---
-DATABASE_URL="postgresql://postgres:postgres@db:5432/vora?schema=public"
+DATABASE_URL="postgresql://postgres:postgres@localhost:5434/vora?schema=public"
 
 # --- NEXTAUTH ---
 NEXTAUTH_URL="https://vora.usev.app"
@@ -43,26 +39,32 @@ NEXTAUTH_SECRET="${AUTH_SECRET}"
 # --- APP ---
 NEXT_PUBLIC_APP_URL="https://vora.usev.app"
 NODE_ENV="production"
+PORT=3005
 EOL
-    echo -e "${GREEN}>>> Archivo .env creado con éxito.${NC}"
-else
-    echo -e "${BLUE}>>> Archivo .env ya existe, saltando creación.${NC}"
 fi
 
-# 2. Docker Deploy
-echo -e "${BLUE}>>> Levantando contenedores Docker...${NC}"
-docker compose -f docker-compose.prod.yml up -d --build
+# 3. Instalación y Build de la App
+echo -e "${BLUE}>>> Instalando dependencias y construyendo...${NC}"
+npm install
+npx prisma generate
+npx prisma db push --accept-data-loss
+npx prisma db seed
+npm run build
 
-# 3. Esperar a que la DB esté lista
-echo -e "${BLUE}>>> Esperando a la base de datos...${NC}"
-sleep 10
+# 4. Iniciar con PM2
+echo -e "${BLUE}>>> Iniciando aplicación con PM2...${NC}"
+if command -v pm2 &> /dev/null; then
+    pm2 delete vora-web 2>/dev/null || true
+    pm2 start npm --name "vora-web" -- start -- -p 3005
+    pm2 save
+    echo -e "${GREEN}>>> Aplicación iniciada en puerto 3005.${NC}"
+else
+    echo -e "${RED}PM2 no encontrado. Instalalo con: npm install -g pm2${NC}"
+    # Intento de arranque manual si no hay PM2 (fallback)
+    # nohup npm start -- -p 3005 &
+fi
 
-# 4. Migraciones y Seed
-echo -e "${BLUE}>>> Ejecutando migraciones y seed...${NC}"
-docker exec vora-web npx prisma db push
-docker exec vora-web npx prisma db seed
-
-# 5. Configuración Nginx
+# 5. Configurar Nginx
 NGINX_CONF="/etc/nginx/sites-available/vora.usev.app"
 
 if [ -d "/etc/nginx/sites-available" ]; then
@@ -70,13 +72,11 @@ if [ -d "/etc/nginx/sites-available" ]; then
     
     # Check if we have sudo privileges
     if [ "$EUID" -ne 0 ]; then 
-        echo -e "${RED}Nota: Se requiere sudo para configurar Nginx. Te pedirá contraseña.${NC}"
         SUDO="sudo"
     else
         SUDO=""
     fi
 
-    # Crear config
     $SUDO bash -c "cat > $NGINX_CONF" << EOL
 server {
     server_name vora.usev.app;
@@ -92,22 +92,12 @@ server {
 }
 EOL
 
-    # Link simbólico
     if [ ! -f "/etc/nginx/sites-enabled/vora.usev.app" ]; then
         $SUDO ln -s $NGINX_CONF /etc/nginx/sites-enabled/
     fi
 
-    # Test y Restart
     $SUDO nginx -t && $SUDO systemctl restart nginx
-    echo -e "${GREEN}>>> Nginx configurado exitosamente.${NC}"
-else
-    echo -e "${RED}>>> No se detectó instalación estándar de Nginx. Saltando configuración automática.${NC}"
 fi
 
-# 6. Certbot (SSL)
-echo -e "${BLUE}====================================================${NC}"
 echo -e "${GREEN}>>> DESPLIEGUE FINALIZADO${NC}"
-echo -e "${BLUE}====================================================${NC}"
-echo -e "Para activar HTTPS, ejecutá manualmente:"
-echo -e "${GREEN}sudo certbot --nginx -d vora.usev.app${NC}"
-echo -e "${BLUE}====================================================${NC}"
+echo -e "Para activar SSL: ${BLUE}sudo certbot --nginx -d vora.usev.app${NC}"
