@@ -30,7 +30,7 @@ if [ ! -f .env ]; then
     AUTH_SECRET=$(openssl rand -base64 32)
     cat > .env << EOL
 # --- DATABASE ---
-DATABASE_URL="postgresql://postgres:postgres@localhost:5434/vora?schema=public"
+DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5434/vora?schema=public"
 
 # --- NEXTAUTH ---
 NEXTAUTH_URL="https://vora.usev.app"
@@ -44,10 +44,14 @@ EOL
 fi
 
 # 2.5 Corregir .env para acceso Local (host)
-# Si el archivo .env antiguo tiene "db:5432", lo cambiamos a "localhost:5434"
+# Si el archivo .env antiguo tiene "db:5432" o "localhost", lo cambiamos a "127.0.0.1:5434"
 if grep -q "@db:5432" .env; then
-    echo -e "${BLUE}>>> Actualizando DATABASE_URL a localhost:5434...${NC}"
-    sed -i 's/@db:5432/@localhost:5434/g' .env
+    echo -e "${BLUE}>>> Actualizando DATABASE_URL a 127.0.0.1:5434...${NC}"
+    sed -i 's/@db:5432/@127.0.0.1:5434/g' .env
+fi
+if grep -q "@localhost:5434" .env; then
+    echo -e "${BLUE}>>> Actualizando DATABASE_URL a 127.0.0.1:5434...${NC}"
+    sed -i 's/@localhost:5434/@127.0.0.1:5434/g' .env
 fi
 
 # 3. Instalación y Build de la App
