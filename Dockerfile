@@ -43,18 +43,23 @@ WORKDIR /app
 ENV NODE_ENV production
 ENV NEXT_TELEMETRY_DISABLED 1
 
-# Create non-root user
+# Create non-root user with home directory
 RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+RUN adduser --system --uid 1001 --ingroup nodejs --home /home/nextjs --shell /bin/bash nextjs
+
+# Set correct permissions for home
+RUN mkdir -p /home/nextjs && chown -R nextjs:nodejs /home/nextjs
 
 # Copy built assets
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 
-# Set correct permissions
+# Copy FULL node_modules to ensure Prisma CLI is available
+COPY --from=builder /app/node_modules ./node_modules
+
+# Set permissions
 RUN chown -R nextjs:nodejs /app
 
 USER nextjs
@@ -63,5 +68,6 @@ EXPOSE 3000
 
 ENV PORT 3000
 ENV HOSTNAME "0.0.0.0"
+ENV HOME "/home/nextjs"
 
 CMD ["node", "server.js"]
