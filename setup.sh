@@ -40,7 +40,7 @@ fi
 
 # 2. Docker Deploy
 echo -e "${BLUE}>>> Levantando contenedores Docker...${NC}"
-docker-compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml up -d --build
 
 # 3. Esperar a que la DB esté lista
 echo -e "${BLUE}>>> Esperando a la base de datos...${NC}"
