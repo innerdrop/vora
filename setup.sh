@@ -43,6 +43,13 @@ PORT=3005
 EOL
 fi
 
+# 2.5 Corregir .env para acceso Local (host)
+# Si el archivo .env antiguo tiene "db:5432", lo cambiamos a "localhost:5434"
+if grep -q "@db:5432" .env; then
+    echo -e "${BLUE}>>> Actualizando DATABASE_URL a localhost:5434...${NC}"
+    sed -i 's/@db:5432/@localhost:5434/g' .env
+fi
+
 # 3. Instalación y Build de la App
 echo -e "${BLUE}>>> Instalando dependencias y construyendo...${NC}"
 npm install
