@@ -14,6 +14,17 @@ NC='\033[0m'
 
 echo -e "${BLUE}>>> Iniciando despliegue de VORA...${NC}"
 
+# 0. Verificar e Instalar Docker
+if ! command -v docker &> /dev/null; then
+    echo -e "${BLUE}>>> Docker no encontrado. Instalando Docker...${NC}"
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    sh get-docker.sh
+    rm get-docker.sh
+    echo -e "${GREEN}>>> Docker instalado correctamente.${NC}"
+else
+    echo -e "${BLUE}>>> Docker ya está instalado.${NC}"
+fi
+
 # 1. Configurar Variables de Entorno
 if [ ! -f .env ]; then
     echo -e "${BLUE}>>> Creando archivo .env...${NC}"
