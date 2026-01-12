@@ -146,6 +146,156 @@ export async function getProfessionalBySlug(slug: string) {
 }
 
 // ============================================================
+// GIRAS MANAGEMENT
+// ============================================================
+
+export async function getDoctorGiras() {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return [];
+
+    const user = await prisma.user.findUnique({
+        where: { id: session.user.id },
+        include: { professionalProfile: true },
+    });
+
+    if (!user?.professionalProfile) return [];
+
+    const giras = await prisma.travelGira.findMany({
+        where: { professionalId: user.professionalProfile.id },
+        orderBy: { arrivalDate: "asc" },
+        include: { _count: { select: { appointments: true } } },
+    });
+
+    return giras.map(g => ({
+        id: g.id,
+        title: g.title,
+        destination: g.destination,
+        arrivalDate: g.arrivalDate.toISOString(),
+        departureDate: g.departureDate.toISOString(),
+        status: g.status,
+        appointmentsCount: g._count.appointments,
+        address: g.consultationAddress,
+    }));
+}
+
+export async function getDoctorAppointments() {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return [];
+
+    const user = await prisma.user.findUnique({
+        where: { id: session.user.id },
+        include: { professionalProfile: true },
+    });
+
+    if (!user?.professionalProfile) return [];
+
+    const appointments = await prisma.appointment.findMany({
+        where: { professionalId: user.professionalProfile.id },
+        include: {
+            patient: { include: { user: true } },
+            gira: true,
+        },
+        orderBy: { scheduledDate: "asc" },
+    });
+
+    return appointments.map(apt => ({
+        id: apt.id,
+        patientName: `${apt.patient.user.firstName || ""} ${apt.patient.user.lastName || ""}`,
+        date: apt.scheduledDate.toISOString(),
+        time: apt.scheduledTime.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
+        status: apt.status,
+        reason: apt.reason,
+        giraDestination: apt.gira?.destination,
+    }));
+}
+
+export async function createGira(data: {
+    title: string;
+    destination: string;
+    arrivalDate: string;
+    departureDate: string;
+    address: string;
+    maxAppointments: number;
+}) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) throw new Error("Unauthorized");
+
+    const user = await prisma.user.findUnique({
+        where: { id: session.user.id },
+        include: { professionalProfile: true },
+    });
+
+    if (!user?.professionalProfile) throw new Error("Profile not found");
+
+    return await prisma.travelGira.create({
+        data: {
+            professionalId: user.professionalProfile.id,
+            title: data.title,
+            destination: data.destination,
+            arrivalDate: new Date(data.arrivalDate),
+            departureDate: new Date(data.departureDate),
+            consultationAddress: data.address,
+            maxAppointmentsPerDay: data.maxAppointments,
+            status: "PUBLISHED", // Auto-publish for simplicity
+        },
+    });
+}
+
+export async function updateGira(id: string, data: Partial<{
+    title: string;
+    destination: string;
+    arrivalDate: string;
+    departureDate: string;
+    address: string;
+    maxAppointments: number;
+    status: "DRAFT" | "PUBLISHED" | "CANCELED";
+}>) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) throw new Error("Unauthorized");
+
+    // Verify ownership
+    const gira = await prisma.travelGira.findUnique({
+        where: { id },
+        include: { professional: { include: { user: true } } },
+    });
+
+    if (!gira || gira.professional.user.id !== session.user.id) {
+        throw new Error("Unauthorized");
+    }
+
+    return await prisma.travelGira.update({
+        where: { id },
+        data: {
+            ...(data.title && { title: data.title }),
+            ...(data.destination && { destination: data.destination }),
+            ...(data.arrivalDate && { arrivalDate: new Date(data.arrivalDate) }),
+            ...(data.departureDate && { departureDate: new Date(data.departureDate) }),
+            ...(data.address && { consultationAddress: data.address }),
+            ...(data.maxAppointments && { maxAppointmentsPerDay: data.maxAppointments }),
+            ...(data.status && { status: data.status }),
+        },
+    });
+}
+
+export async function deleteGira(id: string) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) throw new Error("Unauthorized");
+
+    // Verify ownership
+    const gira = await prisma.travelGira.findUnique({
+        where: { id },
+        include: { professional: { include: { user: true } } },
+    });
+
+    if (!gira || gira.professional.user.id !== session.user.id) {
+        throw new Error("Unauthorized");
+    }
+
+    await prisma.travelGira.delete({ where: { id } });
+    return { success: true };
+}
+
+// ============================================================
 // DASHBOARD PROFESIONAL
 // ============================================================
 
@@ -315,6 +465,87 @@ export async function getPatientDashboardData() {
             size: `${Math.round(file.fileSize / 1024)} KB`,
         })),
     };
+}
+
+export async function getPatientAppointments() {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return [];
+
+    const user = await prisma.user.findUnique({
+        where: { id: session.user.id },
+        include: { patientProfile: true },
+    });
+
+    if (!user?.patientProfile) return [];
+
+    const appointments = await prisma.appointment.findMany({
+        where: { patientId: user.patientProfile.id },
+        include: {
+            professional: {
+                include: { user: true },
+            },
+            gira: true,
+        },
+        orderBy: { scheduledDate: "desc" },
+    });
+
+    return appointments.map(apt => ({
+        id: apt.id,
+        professional: `Dr. ${apt.professional.user.firstName || ""} ${apt.professional.user.lastName || ""}`,
+        specialty: apt.professional.specialty,
+        date: apt.scheduledDate.toISOString(),
+        time: apt.scheduledTime.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
+        location: apt.gira?.consultationAddress || "",
+        status: apt.status,
+        depositPaid: apt.depositStatus === "COMPLETED",
+    }));
+}
+
+export async function cancelAppointment(id: string) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) throw new Error("Unauthorized");
+
+    const user = await prisma.user.findUnique({
+        where: { id: session.user.id },
+        include: { patientProfile: true },
+    });
+
+    if (!user?.patientProfile) throw new Error("Unauthorized");
+
+    // Verify ownership
+    const appointment = await prisma.appointment.findUnique({
+        where: { id },
+    });
+
+    if (!appointment || appointment.patientId !== user.patientProfile.id) {
+        throw new Error("Unauthorized");
+    }
+
+    await prisma.appointment.update({
+        where: { id },
+        data: { status: "CANCELED", canceledAt: new Date() },
+    });
+
+    return { success: true };
+}
+
+
+export async function verifyProfessional(id: string, status: "APPROVED" | "REJECTED") {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id || session.user.role !== "SUPER_ADMIN") {
+        throw new Error("Unauthorized");
+    }
+
+    await prisma.professionalProfile.update({
+        where: { id },
+        data: {
+            verificationStatus: status,
+            verifiedAt: status === "APPROVED" ? new Date() : null,
+            verifiedBy: session.user.email,
+        },
+    });
+
+    return { success: true };
 }
 
 // ============================================================
